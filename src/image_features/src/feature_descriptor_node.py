@@ -104,8 +104,8 @@ class FeaturePublisher:
         # cv2.waitKey(1)
 
         # publish messages
-        self.publish_feature_msg(pts[0].squeeze(), descriptors[0].squeeze(), self.images[0, :, :].squeeze(), self.pub_cam0)
-        self.publish_feature_msg(pts[1].squeeze(), descriptors[1].squeeze(), self.images[1, :, :].squeeze(), self.pub_cam1)
+        self.publish_feature_msg(pts[0].squeeze(), descriptors[0].squeeze(), self.images[0, :, :].squeeze(), self.pub_cam0, self.image_timestamps[0])
+        self.publish_feature_msg(pts[1].squeeze(), descriptors[1].squeeze(), self.images[1, :, :].squeeze(), self.pub_cam1, self.image_timestamps[1])
         print("published")
         self.image_avail = [False, False]
         self.processing = False
@@ -137,7 +137,7 @@ class FeaturePublisher:
         msg.descriptors.layout.dim[2].stride = self.desc_size
         return msg
 
-    def publish_feature_msg(self, pts, descriptors, img, pub):
+    def publish_feature_msg(self, pts, descriptors, img, pub, stamp):
         """
         Set message parameters and publish message
         :param pts: keypoints to be publlished
@@ -168,6 +168,7 @@ class FeaturePublisher:
         msg.descriptors.data = descriptors.tolist()
         msg.trackIds = [-1]
         msg.rawImage = self.bridge.cv2_to_imgmsg((img*255).astype(np.uint8), "mono8")
+        msg.header.stamp = rospy.Time.from_sec(stamp)
         pub.publish(msg)
 
 
