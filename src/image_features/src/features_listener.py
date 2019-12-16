@@ -33,10 +33,17 @@ class FeatureListener:
         pts = np.zeros((msg.numKeypointMeasurements, 2))
         pts[:, 0] = np.array([msg.keypointMeasurementsX])
         pts[:, 1] = np.array([msg.keypointMeasurementsY])
-        cv_image = self.bridge.imgmsg_to_cv2(msg.rawImage, 'mono8')
-        cv_image = cv2.resize(cv_image, (self.width, self.height))
-        img = (cv_image.astype('float32') / 255.)
-        self.show_image_features(img, pts)
+
+        desc_vector = np.array(msg.descriptors.data)
+        desc = desc_vector.reshape(msg.descriptors.layout.dim[2].size, -1).T
+
+        print(desc.shape)
+        print(pts.shape)
+
+        # cv_image = self.bridge.imgmsg_to_cv2(msg.rawImage, 'mono8')
+        # cv_image = cv2.resize(cv_image, (self.width, self.height))
+        # img = (cv_image.astype('float32') / 255.)
+        # self.show_image_features(img, pts)
 
     def show_image_features(self, img, pts):
         out = (np.dstack((img, img, img)) * 255.).astype('uint8')

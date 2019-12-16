@@ -23,26 +23,27 @@ class TSP_Net:
         self.W = width
         self.cuda_avail = cuda_avail
 
-        c1a, c1b, c2a, c3a, c3b, c3c, cHa, cHb, cDa, cDb = 10, 20, 40, 40, 64, 64, 80, 65, 80, 64
-
+        c1, c2, c3, c4, c5 = 32, 32, 64, 64, 128
         input = Input(shape=(self.H, self.W, 1), name='input')
-        conv1a = Conv2D(c1a, kernel_size=(3, 3), activation='relu', padding='same')(input)
-        conv1b = Conv2D(c1b, kernel_size=(3, 3), activation='relu', padding='same')(conv1a)
+        conv1a = Conv2D(c1, kernel_size=(3, 3), activation='relu', padding='same', trainable=True)(input)
+        conv1b = Conv2D(c1, kernel_size=(3, 3), activation='relu', padding='same', trainable=True)(conv1a)
         pool1 = MaxPooling2D((2, 2), strides=2)(conv1b)
-        conv2a = Conv2D(c2a, kernel_size=(3, 3), activation='relu', padding='same')(pool1)
-        conv3a = Conv2D(c3a, kernel_size=(7, 7), activation='relu', strides=4, padding='same')(conv2a)
-        conv3b = Conv2D(c3b, kernel_size=(3, 3), activation='relu', padding='same')(conv3a)
-        conv3c = Conv2D(c3c, kernel_size=(3, 3), activation='relu', padding='same')(conv3b)
+        conv2a = Conv2D(c2, kernel_size=(3, 3), activation='relu', padding='same', trainable=True)(pool1)
+        conv2b = Conv2D(c2, kernel_size=(3, 3), activation='relu', padding='same', trainable=True)(conv2a)
+        pool2 = MaxPooling2D((2, 2), strides=2)(conv2b)
+        conv3a = Conv2D(c3, kernel_size=(3, 3), activation='relu', padding='same', trainable=True)(pool2)
+        conv3b = Conv2D(c3, kernel_size=(3, 3), activation='relu', padding='same', trainable=True)(conv3a)
+        pool3 = MaxPooling2D((2, 2), strides=2)(conv3b)
+        conv4a = Conv2D(c4, kernel_size=(3, 3), activation='relu', padding='same', trainable=True)(pool3)
+        enc = Conv2D(c4, kernel_size=(3, 3), activation='relu', padding='same', name='enc', trainable=True)(conv4a)
 
         # detector head
-        convHa = Conv2D(cHa, kernel_size=(3, 3), activation='relu', padding='same')(conv3c)
-        convHb = Conv2D(cHb, kernel_size=(3, 3), activation='relu', padding='same')(convHa)
-        heat = Conv2D(65, kernel_size=(1, 1), activation=None, padding='valid', name='heat')(convHb)
+        convH = Conv2D(c5, kernel_size=(3, 3), activation='relu', padding='same', name='convH')(enc)
+        heat = Conv2D(65, kernel_size=(1, 1), activation=None, padding='valid', name='heat')(convH)
 
         # descriptor head
-        convDa = Conv2D(cDa, kernel_size=(3, 3), activation='relu', padding='same')(conv3c)
-        convDb = Conv2D(cDb, kernel_size=(3, 3), activation='relu', padding='same')(convDa)
-        desc = Conv2D(desc_size, kernel_size=(1, 1), activation=None, padding='valid', name='desc')(convDb)
+        convDa = Conv2D(c5, kernel_size=(3, 3), activation='relu', padding='same', name='convD')(enc)
+        desc = Conv2D(desc_size, kernel_size=(1, 1), activation=None, padding='valid', name='desc')(convDa)
 
         self.model = Model(inputs=input,
                            outputs=[heat, desc],
@@ -172,14 +173,14 @@ class TSP_Net:
         inds = np.argsort(pts[2, :])
         pts = pts[:, inds[::-1]]  # Sort by confidence.
 
-        # Set the needed parameters to find the refined corners
-        winSize = (5, 5)
-        zeroZone = (-1, -1)
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TermCriteria_COUNT, 40, 0.001)
-
-        # Calculate the refined corner locations
-        refined_corners = cv2.cornerSubPix(img.astype(np.float32).copy(), np.expand_dims(pts[:2, :], axis=1).astype(np.float32).transpose().copy(), winSize, zeroZone, criteria)
-        pts[:2, :] = refined_corners.astype(int).transpose().reshape(2, -1)
+        # # Set the needed parameters to find the refined corners
+        # winSize = (5, 5)
+        # zeroZone = (-1, -1)
+        # criteria = (cv2.TERM_CRITERIA_EPS + cv2.TermCriteria_COUNT, 40, 0.001)
+        #
+        # # Calculate the refined corner locations
+        # refined_corners = cv2.cornerSubPix(img.astype(np.float32).copy(), np.expand_dims(pts[:2, :], axis=1).astype(np.float32).transpose().copy(), winSize, zeroZone, criteria)
+        # pts[:2, :] = refined_corners.astype(int).transpose().reshape(2, -1)
 
         # Remove points along border.
         bord = border_remove_pixels
@@ -215,4 +216,4 @@ class TSP_Net:
         return pts, desc, heatmap
 
     def load_weights(self):
-        self.model.load_weights('/home/dominic/catkin_ws/src/image_features/src/model19.h5')
+        self.model.load_weights('/home/dominic/supermarionet_ros/src/image_features/src/half_encoder_half_decoder_64.h5')
