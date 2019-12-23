@@ -1,1 +1,0 @@
-/usr/bin/c++  -g   CMakeFiles/supermarionet_ros.dir/src/image_features/src/inference.cpp.o  -o supermarionet_ros 
