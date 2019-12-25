@@ -6,6 +6,7 @@
 #include <math.h>
 #include <cv.hpp>
 #include <chrono>
+#include "mlinterp.hpp"
 
 #include "tensorflow/cc/ops/const_op.h"
 #include "tensorflow/cc/ops/image_ops.h"
@@ -103,8 +104,16 @@ Status readTensorFromMat(const Mat &mat, Tensor &outTensor) {
     return Status::OK();
 }
 
+// Driver function to sort the vector elements by
+// first element of pair in descending order
+bool sortbysecond(const pair<pair<unsigned int, unsigned  int>, float> &a,
+                  const pair<pair<unsigned int, unsigned  int>, float> &b)
+{
+    return (a.second < b.second);
+}
+
 // returns row and column indeces and heatmap score where the input array is true
-void whereTrue(Eigen::Tensor<bool, 2, 1>& mask, Eigen::Tensor<float, 2, 1>& heatmap, vector<unsigned int>& r_ind, vector<unsigned int>& c_ind, vector<float>& scores)
+void whereTrue(Eigen::Tensor<bool, 2, 1>& mask, Eigen::Tensor<float, 2, 1>& heatmap, vector<pair<pair<unsigned int, unsigned int>, float>>& pts)
 {
     auto dims = mask.dimensions();
     for (int i = 0; i<dims[0]; i++)
@@ -113,10 +122,86 @@ void whereTrue(Eigen::Tensor<bool, 2, 1>& mask, Eigen::Tensor<float, 2, 1>& heat
         {
             if (mask(i,j))
             {
-                r_ind.push_back(i);
-                c_ind.push_back(j);
-                scores.push_back(heatmap(i,j));
+                pts.push_back(make_pair(make_pair(i, j), heatmap(i,j)));
             }
+        }
+    }
+    // sort by score
+    sort(pts.begin(), pts.end(), sortbysecond);
+}
+
+// non max supression for pixels
+void fastNMS(vector<pair<pair<unsigned int, unsigned int>, float>>& pts, const unsigned int width, const unsigned int height,
+             const unsigned int nms_dist)
+{
+    Eigen::MatrixXi mask = Eigen::MatrixXi::Zero(height + 2 * nms_dist, width + 2 * nms_dist);
+    Eigen::MatrixXi ones = Eigen::MatrixXi::Ones(2 * nms_dist + 1, 2 * nms_dist + 1);
+    unsigned int i;
+    unsigned int j;
+    unsigned int deleted = 0;
+    unsigned int size = pts.size();
+    for(int k = 0; k < size; k++)
+    {
+        i = pts[k - deleted].first.first;
+        j = pts[k - deleted].first.second;
+        if(mask(i + nms_dist, j + nms_dist) == 1){
+//            cout << " removed point: (" << i << ", " << j << ")\n";
+            pts.erase(pts.begin() + k - deleted);
+            deleted +=1;
+            continue;
+        }
+        mask(Eigen::seqN(i, 2 * nms_dist + 1), Eigen::seqN(j, 2 * nms_dist + 1)) = ones;
+    }
+}
+
+// interpolate descriptors
+void descInterpolation(vector<pair<pair<unsigned int, unsigned int>, float>>& pts, vector<vector<float>>& descriptors, Eigen::Tensor<float, 4, 1>& coarse_desc)
+{
+    const unsigned int size = pts.size();
+    auto dims = coarse_desc.dimensions();
+    // define input dimensions
+    unsigned int ni[] = {dims[2], dims[1]};
+    // define input points array
+    float xi[ni[0]];
+    float yi[ni[1]];
+    // define input vallue array
+    float zi[ni[0] * ni[1]];
+    // populate arrays with indeces according to coarse_desc lattice
+    for (int i=0; i<ni[0]; ++i) xi[i]=i * 8 + 4;
+    for (int i=0; i<ni[1]; ++i) yi[i]=i * 8 + 4;
+    // fill in output coordinates
+    float xo[size];
+    float yo[size];
+    for (int i = 0; i < size; ++i)
+    {
+        xo[i] = pts[i].first.first;
+        yo[i] = pts[i].first.second;
+    }
+
+    // initialize dscriptor vectors
+    for (int i = 0; i < size; ++i)
+    {
+        vector<float> desc;
+        descriptors.push_back(desc);
+    }
+    // loop over each descriptor dimension
+    for (int k = 0; k < dims[3]; ++k) {
+        // fill in input values
+        for (int i = 0; i < ni[0]; ++i) {
+            for (int j = 0; j < ni[1]; ++j) {
+                zi[i * ni[1] + j] = coarse_desc(0, j, i, k);
+            }
+        }
+        // Perform the interpolation
+        float zo[size]; // Result is stored in this buffer
+        mlinterp::interp(
+                ni, size,      // Number of points
+                zi, zo,        // input and output values
+                xi, xo, yi, yo // input and output coordinates
+        );
+        // populate with interpolated values
+        for (int i = 0; i < size; ++i) {
+            descriptors[i].push_back(zo[i]);
         }
     }
 }
@@ -178,6 +263,8 @@ int main(int argc, char* argv[]) {
     // output of network is in row major format
     Eigen::Tensor<float, 4, 1> heat = outputs[0].tensor<float, 4>();
     Eigen::Tensor<bool, 4, 1> mask = outputs[1].tensor<float, 4>().cast<bool>();
+    Eigen::Tensor<float, 4, 1> coarse_desc = outputs[2].tensor<float, 4>();
+
     // softmax along channel dimension
     heat = heat.exp();
     Eigen::array<int, 1> dims({3});
@@ -193,21 +280,30 @@ int main(int argc, char* argv[]) {
     Eigen::array<int, 5> five_dim({1, 60, 80, 8, 8});
     array<int, 5> shuffle_five({0, 1, 3, 2, 4});
     Eigen::array<int, 2> two_dim({480, 640});
-    Eigen::Tensor<float, 5, 1> heatmap_5 = nodust.reshape(five_dim).eval().shuffle(shuffle_five);
-    Eigen::Tensor<float, 2, 1> heatmap = heatmap_5.reshape(two_dim);
+    Eigen::Tensor<float, 2, 1> heatmap = nodust.reshape(five_dim).eval().shuffle(shuffle_five).reshape(two_dim);
 
     // reshape point_mask into 480x640 tensor
-    Eigen::Tensor<bool, 5, 1> mask_5 = mask.reshape(five_dim).eval().shuffle(shuffle_five);
-    Eigen::Tensor<bool, 2, 1> point_mask = mask_5.reshape(two_dim);
+    Eigen::Tensor<bool, 2, 1> point_mask = mask.reshape(five_dim).eval().shuffle(shuffle_five).reshape(two_dim);
 
     // get indeces of feature points and corresponding heatmap score
-    vector<unsigned int> r_ind;
-    vector<unsigned int> c_ind;
-    vector<float> scores;
+    vector<pair<pair<unsigned int, unsigned int>, float>> pts;
+    whereTrue(point_mask, heatmap, pts);
+
+    // using modified sort() function to sort
+    sort(pts.begin(), pts.end(), sortbysecond);
+
+    // nms on thresholded points
     chrono::steady_clock::time_point begin = chrono::steady_clock::now();
-    whereTrue(point_mask, heatmap, r_ind, c_ind, scores);
+    fastNMS(pts, input_width, input_height, 8);
     chrono::steady_clock::time_point end = chrono::steady_clock::now();
-    cout << chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << endl;
+    cout << "NMS time: " << chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << endl;
+
+    // interpolate descriptors
+    begin = chrono::steady_clock::now();
+    vector<vector<float>> desc;
+    descInterpolation(pts, desc, coarse_desc);
+    end = chrono::steady_clock::now();
+    cout << "interpolation time: " << chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << endl;
 
     // convert to cv2 matrix for display
     heatmap = heatmap.clip(0.001, 1);
@@ -231,9 +327,9 @@ int main(int argc, char* argv[]) {
 
     // draw circles corresponding to feature locations
     Mat out_circ = img_out.clone();
-    for(int i = 0; i < scores.size(); i++)
+    for(int i = 0; i < pts.size(); i++)
     {
-        Point pt(c_ind.at(i), r_ind.at(i));
+        Point pt(pts[i].first.second, pts[i].first.first);
         circle(out_circ, pt, 1, Scalar(0, 255, 0), FILLED, LINE_AA);
     }
     Mat out;
